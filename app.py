@@ -15,13 +15,17 @@ HTML_TEMPLATE = """
     <title>EC2 Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; color: #333; }
-        .navbar { background: linear-gradient(135deg, #232f3e, #37475a); padding: 16px 32px; color: white; display: flex; align-items: center; justify-content: space-between; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f2f5; color: #333; }
+        .navbar { background: linear-gradient(135deg, #232f3e, #37475a); padding: 16px 32px;
+            color: white; display: flex; align-items: center; justify-content: space-between; }
         .navbar h1 { font-size: 1.4rem; }
         .navbar .status { background: #4caf50; padding: 4px 12px; border-radius: 12px; font-size: 0.85rem; }
         .container { max-width: 1000px; margin: 32px auto; padding: 0 16px; }
-        .card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 24px; margin-bottom: 24px; }
-        .card h2 { font-size: 1.1rem; color: #232f3e; margin-bottom: 16px; border-bottom: 2px solid #ff9900; padding-bottom: 8px; display: inline-block; }
+        .card { background: white; border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 24px; margin-bottom: 24px; }
+        .card h2 { font-size: 1.1rem; color: #232f3e; margin-bottom: 16px;
+            border-bottom: 2px solid #ff9900; padding-bottom: 8px; display: inline-block; }
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
         .metric { background: #f9fafb; border-radius: 8px; padding: 16px; text-align: center; }
         .metric .value { font-size: 1.8rem; font-weight: bold; color: #232f3e; }
@@ -33,12 +37,16 @@ HTML_TEMPLATE = """
         th { background: #f5f5f5; font-weight: 600; }
         .task-section { margin-top: 16px; }
         .task-input { display: flex; gap: 8px; margin-bottom: 16px; }
-        .task-input input { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem; }
-        .task-input button { padding: 10px 20px; background: #ff9900; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .task-input input { flex: 1; padding: 10px 14px;
+            border: 1px solid #ddd; border-radius: 8px; font-size: 0.95rem; }
+        .task-input button { padding: 10px 20px; background: #ff9900; color: white;
+            border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
         .task-input button:hover { background: #e68a00; }
         .task-list { list-style: none; }
-        .task-list li { padding: 10px 14px; background: #f9fafb; margin-bottom: 6px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
-        .task-list li .delete-btn { background: #e74c3c; color: white; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .task-list li { padding: 10px 14px; background: #f9fafb; margin-bottom: 6px;
+            border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+        .task-list li .delete-btn { background: #e74c3c; color: white; border: none;
+            padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
         footer { text-align: center; padding: 24px; color: #999; font-size: 0.85rem; }
     </style>
 </head>
