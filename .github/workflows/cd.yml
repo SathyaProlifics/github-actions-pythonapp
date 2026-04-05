@@ -151,7 +151,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@${{ steps.get_ip.outputs.public_ip }} << 'ENDSSH'
             set -e
             echo "=== Installing system dependencies ==="
-            sudo dnf install -y git python3 python3-pip curl
+            sudo dnf install -y git python3 python3-pip
             git --version
             python3 --version
             echo "=== System dependencies ready ==="
