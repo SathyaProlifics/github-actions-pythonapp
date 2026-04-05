@@ -145,11 +145,15 @@ jobs:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 5m
           script: |
             set -e
             echo "=== Installing system dependencies ==="
-            sudo yum update -y
-            sudo yum install -y git python3 python3-pip curl
+            sudo dnf install -y git python3 python3-pip curl
+            echo "=== Verifying installations ==="
+            git --version
+            python3 --version
+            pip3 --version
             echo "=== System dependencies ready ==="
 
       - name: Clone repository on EC2
@@ -158,10 +162,14 @@ jobs:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 3m
           script: |
             set -e
             echo "=== Cloning repository ==="
+            rm -rf ~/ec2-dashboard
             git clone https://github.com/SathyaProlifics/github-actions-pythonapp.git ~/ec2-dashboard
+            echo "=== Repository cloned ==="
+            ls -la ~/ec2-dashboard/
 
       - name: Set up Python venv and install dependencies
         uses: appleboy/ssh-action@v1
@@ -169,6 +177,7 @@ jobs:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 5m
           script: |
             set -e
             cd ~/ec2-dashboard
@@ -185,6 +194,7 @@ jobs:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 3m
           script: |
             set -e
             cd ~/ec2-dashboard
@@ -201,6 +211,7 @@ jobs:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 1m
           script: |
             set -e
             echo "=== Waiting for app to start ==="
