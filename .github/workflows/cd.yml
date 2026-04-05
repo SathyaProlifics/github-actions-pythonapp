@@ -1,85 +1,200 @@
 name: CD - Deploy to EC2
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
-  deploy:
-    name: Deploy to EC2
+  create-ec2:
+    name: Create EC2 Instance
+    runs-on: ubuntu-latest
+    outputs:
+      instance_id: ${{ steps.launch.outputs.instance_id }}
+      public_ip: ${{ steps.get_ip.outputs.public_ip }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Create Security Group
+        id: sg
+        run: |
+          SG_NAME="ec2-dashboard-sg-${{ github.run_id }}"
+          VPC_ID=$(aws ec2 describe-vpcs --filters "Name=isDefault,Values=true" --query "Vpcs[0].VpcId" --output text)
+
+          SG_ID=$(aws ec2 create-security-group \
+            --group-name "$SG_NAME" \
+            --description "Security group for EC2 Dashboard" \
+            --vpc-id "$VPC_ID" \
+            --query "GroupId" --output text)
+
+          # Allow SSH (port 22)
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp --port 22 --cidr 0.0.0.0/0
+
+          # Allow Flask app (port 5000)
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp --port 5000 --cidr 0.0.0.0/0
+
+          echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
+          echo "=== Created Security Group: $SG_ID ==="
+
+      - name: Create EC2 Key Pair
+        id: keypair
+        run: |
+          KEY_NAME="ec2-dashboard-key-${{ github.run_id }}"
+
+          aws ec2 import-key-pair \
+            --key-name "$KEY_NAME" \
+            --public-key-material fileb://<(echo "${{ secrets.EC2_SSH_KEY }}" | ssh-keygen -y -f /dev/stdin)
+
+          echo "key_name=$KEY_NAME" >> $GITHUB_OUTPUT
+          echo "=== Imported Key Pair: $KEY_NAME ==="
+
+      - name: Launch EC2 Instance
+        id: launch
+        run: |
+          echo "=== Launching Amazon Linux 2023 EC2 Instance ==="
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ${{ secrets.AWS_AMI_ID }} \
+            --instance-type t2.micro \
+            --key-name "${{ steps.keypair.outputs.key_name }}" \
+            --security-group-ids "${{ steps.sg.outputs.sg_id }}" \
+            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=ec2-dashboard-${{ github.run_id }}},{Key=Project,Value=github-actions-pythonapp}]" \
+            --query "Instances[0].InstanceId" --output text)
+
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "=== Launched Instance: $INSTANCE_ID ==="
+
+      - name: Wait for instance to be running
+        run: |
+          echo "=== Waiting for instance to be in running state ==="
+          aws ec2 wait instance-running \
+            --instance-ids ${{ steps.launch.outputs.instance_id }}
+          echo "=== Instance is running ==="
+
+      - name: Wait for status checks to pass
+        run: |
+          echo "=== Waiting for status checks ==="
+          aws ec2 wait instance-status-ok \
+            --instance-ids ${{ steps.launch.outputs.instance_id }}
+          echo "=== Status checks passed ==="
+
+      - name: Get public IP address
+        id: get_ip
+        run: |
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids ${{ steps.launch.outputs.instance_id }} \
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "=== Public IP: $PUBLIC_IP ==="
+
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install and run tests
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pytest
           pip install -r requirements.txt
-          pytest tests/ -v
 
-      - name: Deploy to EC2 via SSH
+      - name: Run tests
+        run: pytest tests/ -v
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: [create-ec2, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies on EC2
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
+          host: ${{ needs.create-ec2.outputs.public_ip }}
+          username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
+            echo "=== Installing system dependencies ==="
+            sudo yum update -y
+            sudo yum install -y git python3 python3-pip curl
+            echo "=== System dependencies ready ==="
 
-            # --- Install system dependencies (first-time setup) ---
-            if ! command -v git &> /dev/null; then
-              echo "Installing git..."
-              sudo yum install -y git
-            fi
+      - name: Clone repository on EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ needs.create-ec2.outputs.public_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            echo "=== Cloning repository ==="
+            git clone https://github.com/SathyaProlifics/github-actions-pythonapp.git ~/ec2-dashboard
 
-            if ! command -v python3 &> /dev/null; then
-              echo "Installing Python3..."
-              sudo yum install -y python3 python3-pip
-            fi
-
-            if ! command -v curl &> /dev/null; then
-              echo "Installing curl..."
-              sudo yum install -y curl
-            fi
-
-            # --- Clone or pull the repo ---
-            if [ ! -d ~/ec2-dashboard ]; then
-              echo "Cloning repository for the first time..."
-              git clone https://github.com/SathyaProlifics/github-actions-pythonapp.git ~/ec2-dashboard
-            else
-              echo "Pulling latest code..."
-              cd ~/ec2-dashboard
-              git pull origin main
-            fi
-
+      - name: Set up Python venv and install dependencies
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ needs.create-ec2.outputs.public_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
             cd ~/ec2-dashboard
-
-            # --- Set up virtual environment (first-time setup) ---
-            if [ ! -d venv ]; then
-              echo "Creating virtual environment..."
-              python3 -m venv venv
-            fi
-
-            # Activate venv and install deps
+            echo "=== Creating virtual environment ==="
+            python3 -m venv venv
             source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
+            echo "=== Dependencies installed ==="
 
-            # --- Set up systemd service ---
+      - name: Configure and start systemd service
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ needs.create-ec2.outputs.public_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/ec2-dashboard
+            echo "=== Setting up systemd service ==="
             sudo cp ec2-dashboard.service /etc/systemd/system/ec2-dashboard.service
             sudo systemctl daemon-reload
             sudo systemctl enable ec2-dashboard
-
-            # Restart the app
+            echo "=== Restarting application ==="
             sudo systemctl restart ec2-dashboard
 
-            # Verify app is running
+      - name: Verify application health
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ needs.create-ec2.outputs.public_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            echo "=== Waiting for app to start ==="
             sleep 3
-            curl -f http://localhost:5000/api/health && echo " App is running!" || echo " App failed to start!"
+            echo "=== Checking health endpoint ==="
+            curl -f http://localhost:5000/api/health && echo " App is running!" || (echo " App failed to start!" && exit 1)
+
+      - name: Print application URL
+        run: |
+          echo "============================================"
+          echo " Application deployed successfully!"
+          echo " URL: http://${{ needs.create-ec2.outputs.public_ip }}:5000"
+          echo " Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
+          echo "============================================"
