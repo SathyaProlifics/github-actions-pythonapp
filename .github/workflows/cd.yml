@@ -10,6 +10,7 @@ jobs:
     outputs:
       instance_id: ${{ steps.launch.outputs.instance_id }}
       public_ip: ${{ steps.get_ip.outputs.public_ip }}
+      ssh_private_key: ${{ steps.genkey.outputs.private_key }}
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -43,17 +44,33 @@ jobs:
           echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
           echo "=== Created Security Group: $SG_ID ==="
 
-      - name: Create EC2 Key Pair
-        id: keypair
+      - name: Generate SSH Key Pair
+        id: genkey
         run: |
           KEY_NAME="ec2-dashboard-key-${{ github.run_id }}"
 
+          # Generate a fresh RSA key pair
+          ssh-keygen -t rsa -b 4096 -f /tmp/ec2_key -N "" -q
+          chmod 600 /tmp/ec2_key
+
+          # Import public key to AWS
           aws ec2 import-key-pair \
             --key-name "$KEY_NAME" \
-            --public-key-material fileb://<(echo "${{ secrets.EC2_SSH_KEY }}" | ssh-keygen -y -f /dev/stdin)
+            --public-key-material fileb:///tmp/ec2_key.pub
+
+          # Pass private key to next jobs via output (mask it)
+          PRIVATE_KEY=$(cat /tmp/ec2_key)
+          echo "::add-mask::$PRIVATE_KEY"
+          EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "private_key<<$EOF_MARKER" >> $GITHUB_OUTPUT
+          echo "$PRIVATE_KEY" >> $GITHUB_OUTPUT
+          echo "$EOF_MARKER" >> $GITHUB_OUTPUT
 
           echo "key_name=$KEY_NAME" >> $GITHUB_OUTPUT
-          echo "=== Imported Key Pair: $KEY_NAME ==="
+
+          # Clean up key files
+          rm -f /tmp/ec2_key /tmp/ec2_key.pub
+          echo "=== Key Pair created and imported: $KEY_NAME ==="
 
       - name: Get latest Amazon Linux 2023 AMI ID
         id: ami
@@ -79,7 +96,7 @@ jobs:
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id ${{ steps.ami.outputs.ami_id }} \
             --instance-type t2.micro \
-            --key-name "${{ steps.keypair.outputs.key_name }}" \
+            --key-name "${{ steps.genkey.outputs.key_name }}" \
             --security-group-ids "${{ steps.sg.outputs.sg_id }}" \
             --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=ec2-dashboard-${{ github.run_id }}},{Key=Project,Value=github-actions-pythonapp}]" \
             --query "Instances[0].InstanceId" --output text)
@@ -144,7 +161,7 @@ jobs:
         with:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
           command_timeout: 5m
           script: |
             set -e
@@ -161,7 +178,7 @@ jobs:
         with:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
           command_timeout: 3m
           script: |
             set -e
@@ -176,7 +193,7 @@ jobs:
         with:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
           command_timeout: 5m
           script: |
             set -e
@@ -193,7 +210,7 @@ jobs:
         with:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
           command_timeout: 3m
           script: |
             set -e
@@ -210,7 +227,7 @@ jobs:
         with:
           host: ${{ needs.create-ec2.outputs.public_ip }}
           username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
           command_timeout: 1m
           script: |
             set -e
