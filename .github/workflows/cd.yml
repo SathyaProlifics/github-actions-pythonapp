@@ -4,14 +4,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  create-ec2:
-    name: Create EC2 Instance
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
-    outputs:
-      instance_id: ${{ steps.launch.outputs.instance_id }}
-      public_ip: ${{ steps.get_ip.outputs.public_ip }}
-      ssh_private_key: ${{ steps.genkey.outputs.private_key }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  create-and-deploy:
+    name: Create EC2 & Deploy
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -31,12 +52,10 @@ jobs:
             --vpc-id "$VPC_ID" \
             --query "GroupId" --output text)
 
-          # Allow SSH (port 22)
           aws ec2 authorize-security-group-ingress \
             --group-id "$SG_ID" \
             --protocol tcp --port 22 --cidr 0.0.0.0/0
 
-          # Allow Flask app (port 5000)
           aws ec2 authorize-security-group-ingress \
             --group-id "$SG_ID" \
             --protocol tcp --port 5000 --cidr 0.0.0.0/0
@@ -49,33 +68,19 @@ jobs:
         run: |
           KEY_NAME="ec2-dashboard-key-${{ github.run_id }}"
 
-          # Generate a fresh RSA key pair
           ssh-keygen -t rsa -b 4096 -f /tmp/ec2_key -N "" -q
           chmod 600 /tmp/ec2_key
 
-          # Import public key to AWS
           aws ec2 import-key-pair \
             --key-name "$KEY_NAME" \
             --public-key-material fileb:///tmp/ec2_key.pub
 
-          # Pass private key to next jobs via output (mask it)
-          PRIVATE_KEY=$(cat /tmp/ec2_key)
-          echo "::add-mask::$PRIVATE_KEY"
-          EOF_MARKER=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "private_key<<$EOF_MARKER" >> $GITHUB_OUTPUT
-          echo "$PRIVATE_KEY" >> $GITHUB_OUTPUT
-          echo "$EOF_MARKER" >> $GITHUB_OUTPUT
-
           echo "key_name=$KEY_NAME" >> $GITHUB_OUTPUT
+          echo "=== Key Pair created: $KEY_NAME ==="
 
-          # Clean up key files
-          rm -f /tmp/ec2_key /tmp/ec2_key.pub
-          echo "=== Key Pair created and imported: $KEY_NAME ==="
-
-      - name: Get latest Amazon Linux 2023 AMI ID
+      - name: Get latest Amazon Linux 2023 AMI
         id: ami
         run: |
-          echo "=== Fetching latest Amazon Linux 2023 AMI ==="
           AMI_ID=$(aws ec2 describe-images \
             --owners amazon \
             --filters \
@@ -91,8 +96,6 @@ jobs:
       - name: Launch EC2 Instance
         id: launch
         run: |
-          echo "=== Launching Amazon Linux 2023 EC2 Instance ==="
-          echo "=== Using AMI: ${{ steps.ami.outputs.ami_id }} ==="
           INSTANCE_ID=$(aws ec2 run-instances \
             --image-id ${{ steps.ami.outputs.ami_id }} \
             --instance-type t2.micro \
@@ -128,74 +131,46 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "=== Public IP: $PUBLIC_IP ==="
 
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
+      - name: Wait for SSH to be available
         run: |
-          python -m pip install --upgrade pip
-          pip install pytest
-          pip install -r requirements.txt
-
-      - name: Run tests
-        run: pytest tests/ -v
-
-  deploy:
-    name: Deploy to EC2
-    runs-on: ubuntu-latest
-    needs: [create-ec2, test]
-    steps:
-      - uses: actions/checkout@v4
+          EC2_HOST=${{ steps.get_ip.outputs.public_ip }}
+          echo "=== Waiting for SSH on $EC2_HOST ==="
+          for i in $(seq 1 30); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i /tmp/ec2_key ec2-user@$EC2_HOST "echo SSH ready" 2>/dev/null; then
+              echo "=== SSH connection successful ==="
+              exit 0
+            fi
+            echo "Attempt $i: SSH not ready, retrying in 10s..."
+            sleep 10
+          done
+          echo "=== SSH connection failed after 30 attempts ==="
+          exit 1
 
       - name: Install system dependencies on EC2
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ needs.create-ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
-          command_timeout: 5m
-          script: |
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@${{ steps.get_ip.outputs.public_ip }} << 'ENDSSH'
             set -e
             echo "=== Installing system dependencies ==="
             sudo dnf install -y git python3 python3-pip curl
-            echo "=== Verifying installations ==="
             git --version
             python3 --version
-            pip3 --version
             echo "=== System dependencies ready ==="
+          ENDSSH
 
       - name: Clone repository on EC2
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ needs.create-ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
-          command_timeout: 3m
-          script: |
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@${{ steps.get_ip.outputs.public_ip }} << 'ENDSSH'
             set -e
             echo "=== Cloning repository ==="
             rm -rf ~/ec2-dashboard
             git clone https://github.com/SathyaProlifics/github-actions-pythonapp.git ~/ec2-dashboard
-            echo "=== Repository cloned ==="
             ls -la ~/ec2-dashboard/
+            echo "=== Repository cloned ==="
+          ENDSSH
 
       - name: Set up Python venv and install dependencies
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ needs.create-ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
-          command_timeout: 5m
-          script: |
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@${{ steps.get_ip.outputs.public_ip }} << 'ENDSSH'
             set -e
             cd ~/ec2-dashboard
             echo "=== Creating virtual environment ==="
@@ -204,42 +179,40 @@ jobs:
             pip install --upgrade pip
             pip install -r requirements.txt
             echo "=== Dependencies installed ==="
+          ENDSSH
 
       - name: Configure and start systemd service
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ needs.create-ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
-          command_timeout: 3m
-          script: |
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@${{ steps.get_ip.outputs.public_ip }} << 'ENDSSH'
             set -e
             cd ~/ec2-dashboard
             echo "=== Setting up systemd service ==="
             sudo cp ec2-dashboard.service /etc/systemd/system/ec2-dashboard.service
             sudo systemctl daemon-reload
             sudo systemctl enable ec2-dashboard
-            echo "=== Restarting application ==="
             sudo systemctl restart ec2-dashboard
+            echo "=== Application started ==="
+          ENDSSH
 
       - name: Verify application health
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ needs.create-ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ needs.create-ec2.outputs.ssh_private_key }}
-          command_timeout: 1m
-          script: |
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key ec2-user@${{ steps.get_ip.outputs.public_ip }} << 'ENDSSH'
             set -e
-            echo "=== Waiting for app to start ==="
-            sleep 3
+            sleep 5
             echo "=== Checking health endpoint ==="
-            curl -f http://localhost:5000/api/health && echo " App is running!" || (echo " App failed to start!" && exit 1)
+            curl -f http://localhost:5000/api/health
+            echo ""
+            echo "=== App is running! ==="
+          ENDSSH
 
       - name: Print application URL
         run: |
           echo "============================================"
           echo " Application deployed successfully!"
-          echo " URL: http://${{ needs.create-ec2.outputs.public_ip }}:5000"
-          echo " Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
+          echo " URL: http://${{ steps.get_ip.outputs.public_ip }}:5000"
+          echo " Instance ID: ${{ steps.launch.outputs.instance_id }}"
           echo "============================================"
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f /tmp/ec2_key /tmp/ec2_key.pub
