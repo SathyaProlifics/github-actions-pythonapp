@@ -1,0 +1,53 @@
+name: CD - Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and run tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r requirements.txt
+          pytest tests/ -v
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/ec2-dashboard
+
+            # Pull latest code
+            git pull origin main
+
+            # Activate venv and install deps
+            source venv/bin/activate
+            pip install -r requirements.txt
+
+            # Copy systemd service file and enable it
+            sudo cp ec2-dashboard.service /etc/systemd/system/ec2-dashboard.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable ec2-dashboard
+
+            # Restart the app
+            sudo systemctl restart ec2-dashboard
+
+            # Verify app is running
+            sleep 3
+            curl -f http://localhost:5000/api/health && echo " App is running!" || echo " App failed to start!"
