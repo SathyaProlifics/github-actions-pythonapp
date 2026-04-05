@@ -31,16 +31,48 @@ jobs:
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            set -e
+
+            # --- Install system dependencies (first-time setup) ---
+            if ! command -v git &> /dev/null; then
+              echo "Installing git..."
+              sudo yum install -y git
+            fi
+
+            if ! command -v python3 &> /dev/null; then
+              echo "Installing Python3..."
+              sudo yum install -y python3 python3-pip
+            fi
+
+            if ! command -v curl &> /dev/null; then
+              echo "Installing curl..."
+              sudo yum install -y curl
+            fi
+
+            # --- Clone or pull the repo ---
+            if [ ! -d ~/ec2-dashboard ]; then
+              echo "Cloning repository for the first time..."
+              git clone https://github.com/SathyaProlifics/github-actions-pythonapp.git ~/ec2-dashboard
+            else
+              echo "Pulling latest code..."
+              cd ~/ec2-dashboard
+              git pull origin main
+            fi
+
             cd ~/ec2-dashboard
 
-            # Pull latest code
-            git pull origin main
+            # --- Set up virtual environment (first-time setup) ---
+            if [ ! -d venv ]; then
+              echo "Creating virtual environment..."
+              python3 -m venv venv
+            fi
 
             # Activate venv and install deps
             source venv/bin/activate
+            pip install --upgrade pip
             pip install -r requirements.txt
 
-            # Copy systemd service file and enable it
+            # --- Set up systemd service ---
             sudo cp ec2-dashboard.service /etc/systemd/system/ec2-dashboard.service
             sudo systemctl daemon-reload
             sudo systemctl enable ec2-dashboard
