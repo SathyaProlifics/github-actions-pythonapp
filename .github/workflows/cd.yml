@@ -55,12 +55,29 @@ jobs:
           echo "key_name=$KEY_NAME" >> $GITHUB_OUTPUT
           echo "=== Imported Key Pair: $KEY_NAME ==="
 
+      - name: Get latest Amazon Linux 2023 AMI ID
+        id: ami
+        run: |
+          echo "=== Fetching latest Amazon Linux 2023 AMI ==="
+          AMI_ID=$(aws ec2 describe-images \
+            --owners amazon \
+            --filters \
+              "Name=name,Values=al2023-ami-2023.*-x86_64" \
+              "Name=state,Values=available" \
+              "Name=architecture,Values=x86_64" \
+            --query "sort_by(Images, &CreationDate)[-1].ImageId" \
+            --output text)
+
+          echo "ami_id=$AMI_ID" >> $GITHUB_OUTPUT
+          echo "=== Latest AMI: $AMI_ID ==="
+
       - name: Launch EC2 Instance
         id: launch
         run: |
           echo "=== Launching Amazon Linux 2023 EC2 Instance ==="
+          echo "=== Using AMI: ${{ steps.ami.outputs.ami_id }} ==="
           INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id ${{ secrets.AWS_AMI_ID }} \
+            --image-id ${{ steps.ami.outputs.ami_id }} \
             --instance-type t2.micro \
             --key-name "${{ steps.keypair.outputs.key_name }}" \
             --security-group-ids "${{ steps.sg.outputs.sg_id }}" \
