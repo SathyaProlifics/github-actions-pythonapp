@@ -1,0 +1,5 @@
+aws_region    = "us-east-1"
+project_name  = "ec2-dashboard"
+instance_type = "t2.micro"
+ssh_cidr      = "0.0.0.0/0"
+git_repo_url  = "https://github.com/SathyaProlifics/github-actions-pythonapp.git"
